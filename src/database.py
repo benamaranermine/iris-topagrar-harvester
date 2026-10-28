@@ -1,6 +1,7 @@
 
 """PostgreSQL persistence for the IRIS-SIG-33 harvester."""
 
+import math
 import os
 from pathlib import Path
 
@@ -21,7 +22,6 @@ def get_connection():
         "DATABASE_USER",
         "DATABASE_PASSWORD",
     )
-
     missing = [key for key in required if not os.getenv(key)]
 
     if missing:
@@ -40,13 +40,51 @@ def get_connection():
     )
 
 
+def _parse_coordinates(coordinates):
+    """
+    Validate coordinates in (longitude, latitude) order.
+
+    Returns:
+        (longitude, latitude, status)
+
+        status is:
+        - "valid" when coordinates pass validation
+        - "invalid" when coordinates were supplied but are invalid
+        - "missing" when no coordinates were supplied
+    """
+    if coordinates is None:
+        return None, None, "missing"
+
+    try:
+        if len(coordinates) != 2:
+            return None, None, "invalid"
+
+        longitude = float(coordinates[0])
+        latitude = float(coordinates[1])
+
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None, None, "invalid"
+
+    if not (
+        math.isfinite(longitude)
+        and math.isfinite(latitude)
+        and -180 <= longitude <= 180
+        and -90 <= latitude <= 90
+    ):
+        return None, None, "invalid"
+
+    return longitude, latitude, "valid"
+
+
 def save_records(records):
     """
-    Insert or update articles in PostgreSQL.
+    Insert or update article records in PostgreSQL.
 
-    Coordinates are expected as (longitude, latitude) in EPSG:4326.
-    PostGIS transforms them to EPSG:25832.
+    Coordinates must be supplied as (longitude, latitude) in EPSG:4326.
+    Valid coordinates are transformed to EPSG:25832 for PostGIS storage.
+
     Records are uniquely identified by (source, source_id).
+    Reprocessing an existing record updates it instead of duplicating it.
     """
     if not records:
         return 0
@@ -99,33 +137,25 @@ def save_records(records):
     with get_connection() as conn:
         with conn.cursor() as cur:
             for record in records:
-                coordinates = record.get("coordinates")
-
-                longitude = None
-                latitude = None
-
-                if coordinates and len(coordinates) == 2:
-                    longitude, latitude = coordinates
-
-                    # Reject invalid longitude/latitude values.
-                    try:
-                        longitude = float(longitude)
-                        latitude = float(latitude)
-
-                        if not (
-                            -180 <= longitude <= 180
-                            and -90 <= latitude <= 90
-                        ):
-                            longitude = None
-                            latitude = None
-                    except (TypeError, ValueError):
-                        longitude = None
-                        latitude = None
+                longitude, latitude, coordinate_result = (
+                    _parse_coordinates(record.get("coordinates"))
+                )
 
                 location_status = record.get("location_status")
 
-                if longitude is not None and latitude is not None:
-                    location_status = "place_geocoded"
+                if coordinate_result == "invalid":
+                    # Do not silently accept invalid coordinate values.
+                    location_status = "invalid_coordinates"
+
+                elif coordinate_result == "valid":
+                    # Preserve whether coordinates came from article
+                    # content or were resolved through geocoding.
+                    if location_status not in {
+                        "coordinates_found",
+                        "place_geocoded",
+                    }:
+                        location_status = "place_geocoded"
+
                 elif not location_status:
                     location_status = (
                         "place_mention_unresolved"

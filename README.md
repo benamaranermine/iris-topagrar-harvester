@@ -1,45 +1,43 @@
-# IRIS-SIG-33 — TopAgrar RSS Harvester
+# IRIS-SIG-33 — TopAgrar Structural Change & Land Market Harvester
 
 ## 1. Project Overview
 
-IRIS-SIG-33 is a Python-based data collection pipeline that retrieves agricultural news from TopAgrar, analyzes article content, identifies potential signs of dairy and livestock farming distress, extracts geographic information, and stores the results in PostgreSQL with PostGIS support.
+IRIS-SIG-33 is a Python ingestion pipeline that retrieves agricultural news articles from TopAgrar, screens their content for possible dairy and livestock farming distress, extracts geographic context when available, and stores traceable staging records in PostgreSQL with PostGIS support.
 
-The pipeline looks for two categories of signals:
+The assignment objective is to identify regional dairy farm liquidations and structural distress in livestock production. The pipeline distinguishes between:
 
-- **Explicit distress:** Indicators such as farm closures, insolvency, liquidation, or cessation of agricultural activities.
-- **Economic or structural risk:** Indicators such as rising production costs, falling milk prices, feed shortages, and financial pressure on agricultural businesses.
+- **Explicit distress** — possible farm closure, insolvency, liquidation, or cessation of agricultural activity.
+- **Economic or structural risk** — possible pressure from production costs, milk prices, feed shortages, or other livestock-sector conditions.
 
-Collected records are stored in the `iris_staging.signal_ingest` table for further analysis and geographic exploration.
+Records are stored in `iris_staging.signal_ingest` for further validation and analysis. Keyword-based signals are screening indicators; they do not prove that a specific farm is distressed.
 
-## 2. Main Features
+## 2. Features
 
-- Fetches articles from a configurable TopAgrar RSS feed.
-- Parses RSS/Atom entries and extracts article metadata.
-- Skips entries missing required fields and removes duplicate entries within a feed.
-- Classifies articles using keyword-based rules.
-- Extracts recognized place names and geographic coordinates.
-- Geocodes selected locations using OpenStreetMap Nominatim.
-- Stores point geometries in PostGIS using SRID 25832.
-- Uses PostgreSQL upserts to avoid duplicate database records.
-- Handles HTTP errors, invalid or empty feeds, and database errors.
-- Loads local configuration from a `.env` file.
-- Includes automated tests for date normalization, classification, feed parsing, duplicates, and feed errors.
+- Configurable RSS feed URL through an environment variable.
+- RSS/Atom parsing and extraction of source identifiers, titles, publication dates, URLs, summaries, and location text when available.
+- Skipping entries with missing required fields and removing duplicate identifiers within a feed response.
+- Keyword-based classification into explicit distress, structural risk, or no detected signal.
+- Validation and normalization of geographic coordinates.
+- Geocoding of selected place names using OpenStreetMap Nominatim.
+- Storage of accepted point geometries in PostGIS using SRID 25832.
+- Idempotent database writes using a unique key on `(source, source_id)` and PostgreSQL `ON CONFLICT ... DO UPDATE`.
+- Visible handling of HTTP errors, unusable or empty feeds, invalid coordinates, and database failures.
+- Automated tests using local fixtures and mocked external/database interactions.
+- SQL queries for checking record uniqueness, required fields, signal classifications, and spatial data quality.
 
 ## 3. Technology Stack
 
-- **Python** — data collection and processing.
+- **Python** — ingestion and processing.
 - **feedparser** — RSS/Atom parsing.
 - **Requests** — HTTP requests.
-- **python-dotenv** — environment configuration.
+- **python-dotenv** — local environment configuration.
 - **psycopg** — PostgreSQL connectivity.
-- **PostgreSQL 16** — relational database.
-- **PostGIS 3.4** — spatial data storage and processing.
-- **pytest** — automated testing.
-- **OpenStreetMap Nominatim** — geographic lookup.
+- **PostgreSQL 16** — relational staging database.
+- **PostGIS 3.4** — spatial data support.
+- **pytest** — automated tests.
+- **OpenStreetMap Nominatim** — lookup of selected place names.
 
 ## 4. Project Structure
-
-The main project files include:
 
 ```text
 iris-topagrar-harvester/
@@ -50,7 +48,10 @@ iris-topagrar-harvester/
 │   ├── database.py
 │   └── main.py
 ├── tests/
-│   └── test_harvester.py
+│   ├── fixtures/
+│   ├── test_database.py
+│   ├── test_harvester.py
+│   └── test_pipeline.py
 ├── data/
 │   └── geocode_cache.json
 ├── sql/
@@ -60,35 +61,31 @@ iris-topagrar-harvester/
 └── README.md
 ```
 
-The local `.env` file is created on each developer's machine and must not be committed. The `data/` and `sql/` directories may contain additional project-specific files.
+The local `.env` file is created on each machine and must not be committed. The `data/` and `sql/` directories may contain local cache and SQL resources used by the project.
 
 ## 5. Requirements
 
-Before running the project, install or configure:
+Before running the application, install or configure:
 
-- Python compatible with the project dependencies.
+- Python compatible with the dependencies in `requirements.txt`.
 - PostgreSQL 16.
-- PostGIS 3.4 installed in the PostgreSQL 16 instance.
-- Git, if you are cloning or using version control.
+- PostGIS 3.4 enabled in the target PostgreSQL database.
+- Git, if you are cloning the repository.
 
-The database settings in `.env` must match the PostgreSQL instance being used.
+The database connection values in `.env` must match your own PostgreSQL instance.
 
 ## 6. Installation
 
-### Step 1 — Open the project
+### Step 1 — Clone or open the repository
 
-If the repository is already on your computer, navigate to its root directory:
-
-```powershell
-cd C:\Users\dell\Documents\iris-topagrar-harvester
-```
-
-If you are setting up a fresh copy, clone the repository and then enter its directory:
+For a fresh checkout:
 
 ```powershell
 git clone https://github.com/benamaranermine/iris-topagrar-harvester.git
 cd iris-topagrar-harvester
 ```
+
+If the project is already on your machine, open the project directory instead.
 
 ### Step 2 — Create and activate a virtual environment
 
@@ -97,7 +94,7 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-If PowerShell blocks script execution, allow scripts for the current terminal session only and activate the environment again:
+If PowerShell blocks activation scripts, allow scripts only for the current terminal session and activate again:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
@@ -113,9 +110,7 @@ pip install -r requirements.txt
 
 ## 7. Environment Configuration
 
-Create a local `.env` file in the project root using `.env.example` as a template.
-
-Example configuration:
+Create a local `.env` file in the project root using `.env.example` as the template. For example:
 
 ```dotenv
 DATABASE_HOST=localhost
@@ -126,28 +121,28 @@ DATABASE_PASSWORD=replace_me
 RSS_URL=https://www.topagrar.com/top_agrar_online-10090692.xml
 ```
 
-Replace the example values with the settings for your own database. The port shown above (`5434`) is the port used in the development environment documented for this project; use your actual PostgreSQL port if it differs.
+Replace these example settings with the values for your machine. `5434` is the port used in the development environment for this project; use your actual PostgreSQL port if it differs.
 
-**Security requirements:**
+**Credentials and repository hygiene:**
 
-- Never commit `.env` to Git.
-- Never publish a real database password.
+- Never commit `.env` or publish a real database password.
 - Keep `.env.example` limited to placeholder values.
 - Ensure `.env` is listed in `.gitignore`.
+- Do not include real credentials in screenshots, logs, or documentation.
 
-## 8. RSS Source
+## 8. RSS Source and Endpoint Notes
 
-The configured feed is:
+The feed configured for development is:
 
 `https://www.topagrar.com/top_agrar_online-10090692.xml`
 
-During implementation, the originally specified endpoint, `https://www.topagrar.com/rss`, did not provide a usable RSS feed. The alternative endpoint above was selected for testing the pipeline.
+The assignment specified `https://www.topagrar.com/rss`. During implementation, that endpoint did not provide a usable RSS response in the development checks, so the alternative feed above was used to develop and test the RSS/Atom ingestion pattern. The configured feed can be changed with `RSS_URL`.
 
-The feed URL can be changed using the `RSS_URL` environment variable. Feed availability and article contents may change over time.
+Feed availability, format, article counts, and publication dates can change. Verify source accessibility and dates at runtime; this README does not guarantee that the live endpoint will always be available or contain the same records. The implementation uses normal HTTP requests and does not attempt to bypass access restrictions.
 
 ## 9. Database Setup
 
-Connect to the `iris` database using `psql` or pgAdmin. Run the following SQL in that database to enable PostGIS and create the staging schema and table:
+Connect to the target database (named `iris` in the development environment) using `psql` or pgAdmin. Run the following SQL if the schema and table have not already been created:
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS postgis;
@@ -182,82 +177,81 @@ CREATE INDEX IF NOT EXISTS signal_ingest_geom_idx
     ON iris_staging.signal_ingest USING GIST (geom);
 ```
 
-The unique constraint on `(source, source_id)` allows the pipeline to update an existing article instead of inserting a duplicate.
+The unique constraint on `(source, source_id)` is essential for idempotent ingestion. If the table already exists, verify that the unique constraint is present; `CREATE TABLE IF NOT EXISTS` does not modify an existing table's definition.
 
 ## 10. Running the Harvester
 
-Make sure PostgreSQL is running and the `.env` file is configured correctly. From the project root, activate the virtual environment and run:
+Ensure PostgreSQL is running and `.env` is configured. From the project root, activate `.venv` and run:
 
 ```powershell
 python -m src.main
 ```
 
-The pipeline:
+The pipeline fetches the feed, parses article records, applies classification rules, processes location information, saves records to PostgreSQL, and prints a run summary. The program raises an error when a required processing step fails rather than reporting a failed run as successful.
 
-1. Retrieves the RSS feed.
-2. Parses available articles.
-3. Classifies articles using keyword-based rules.
-4. Identifies and attempts to geocode selected locations.
-5. Saves article records to PostgreSQL.
-6. Prints a summary of the run.
+### Latest observed run output
 
-### Example output from the latest verified run
+The following output was reported by a local run on October 28, 2026. Feed data and output counts may change on subsequent runs.
 
 ```text
 Fetching the TopAgrar RSS feed...
 Articles retrieved: 100
 Explicit distress signals: 0
 Articles indicating risk: 7
-Geocoding detected locations...
-Locations successfully geocoded: 4
-Unresolved place mentions: 20
-Articles without a recognized location: 76
+Processing geographic information...
+Locations with accepted coordinates: 4
+Unresolved place mentions: 21
+Articles without a recognized location: 75
+Rejected invalid coordinates: 0
+Coordinates outside target region: 1
 Saving records to PostgreSQL...
 Articles processed in the database: 100
 Harvest completed successfully.
 ```
 
-These figures describe one run and may change as the feed changes. They are not the same as cumulative counts stored in the database.
+These figures describe that particular execution. They are not the same as cumulative counts stored in the database.
 
 ## 11. Signal Classification
 
-The pipeline uses keyword-based rules to classify articles.
+The classifier uses keyword-based rules over article titles and summaries, together with farming-domain terms, to screen for potential signals.
 
-| Signal type | Description |
+| Signal type | Meaning |
 |---|---|
-| `dairy_livestock_distress` | Explicit indicators of farm closure, insolvency, liquidation, or cessation of activity. |
-| `dairy_livestock_risk` | Indicators of economic pressure or structural risk affecting dairy or livestock farming. |
-| `NULL` | No signal detected by the current classification rules. |
+| `dairy_livestock_distress` | Possible explicit distress, such as farm closure, insolvency, liquidation, or cessation of activity. |
+| `dairy_livestock_risk` | Possible economic or structural risk affecting dairy or livestock farming. |
+| `NULL` | No signal detected by the configured keyword rules. |
 
-Explicit distress takes precedence over general risk indicators.
+Explicit distress takes precedence over general risk indicators. The classification is heuristic. A positive match is not proof of farm distress, and an article that does not match the configured vocabulary may still be relevant. Results should be reviewed before operational or policy use.
 
-Keyword matching is a screening method. A detected keyword does not prove that a farm is distressed, and an article without a detected keyword is not necessarily irrelevant. Results should be validated before they are used for operational or policy decisions.
+## 12. Geographic Processing and Assumptions
 
-## 12. Geographic Processing
+Locations are extracted from article content when possible and selected place names may be looked up with OpenStreetMap Nominatim. Accepted coordinates are transformed from WGS 84 (EPSG:4326) into the target spatial reference system, EPSG:25832 (ETRS89 / UTM zone 32N), before being stored in the `geom` column.
 
-The pipeline extracts recognized place names and looks up selected locations using OpenStreetMap Nominatim.
+Coordinates passed from the location-processing stage to the database layer use `(longitude, latitude)` order. Coordinates obtained from article text may initially be represented as `(latitude, longitude)` and must be normalized before persistence. Invalid coordinates and points outside the configured geographic filter are not stored as accepted geometries.
 
-Geographic results are stored in the `geom` column as PostGIS `POINT` geometries with SRID 25832 (ETRS89 / UTM zone 32N).
+The current approximate geographic filter is:
 
-The `location_status` field records the outcome of location processing. Current stored statuses include:
+- Longitude: 6.0 to 12.0 degrees.
+- Latitude: 47.0 to 55.0 degrees.
 
-- `place_geocoded` — a selected location was geocoded and stored as a spatial point.
+This is an implementation-specific filter, not an official administrative or operational boundary. It excludes some areas, including parts of Germany, so it should be reviewed if broader geographic coverage is required.
+
+The `location_status` field describes the location-processing outcome. Statuses used by the current pipeline include:
+
+- `coordinates_found` — coordinates extracted from article content were validated and accepted.
+- `place_geocoded` — an approved place name was geocoded and the point was accepted.
+- `invalid_coordinates` — supplied coordinate values failed validation.
+- `coordinates_outside_target_region` — a point was outside the configured geographic filter.
 - `place_mention_unresolved` — a place was mentioned but could not be resolved to an accepted point.
 - `unresolved` — no usable location was identified.
 
-Only selected, sufficiently specific locations are eligible for geocoding. Broad regions, ambiguous place mentions, and locations outside the project's geographic filter are not automatically converted into spatial points.
-
-**Important limitations:**
-
-- A town's coordinates represent the town or geocoding result, not necessarily the precise location of a farm.
-- EPSG:25832 is appropriate only for locations within its intended geographic area. The current geographic filter is approximate and is not an official boundary.
-- Nominatim should be used responsibly, with an appropriate request frequency and a descriptive User-Agent. Cached results can reduce repeated requests.
+Only selected, sufficiently specific place names are eligible for geocoding. A geocoded town or settlement represents the geocoding result, not necessarily the precise position of a farm. Nominatim should be used responsibly, with a descriptive User-Agent, appropriate request frequency, and caching where available.
 
 ## 13. Data Validation Queries
 
-Run these SQL queries against the `iris` database to review stored data.
+Run these queries against the database used by the application.
 
-### Total records and signal classifications
+### Total records and classifications
 
 ```sql
 SELECT
@@ -269,19 +263,14 @@ SELECT
     COUNT(*) FILTER (
         WHERE signal_type = 'dairy_livestock_risk'
     ) AS risk_signals,
-    COUNT(*) FILTER (
-        WHERE signal_type IS NULL
-    ) AS articles_without_signal
+    COUNT(*) FILTER (WHERE signal_type IS NULL) AS articles_without_signal
 FROM iris_staging.signal_ingest;
 ```
 
-### Check for duplicate source records
+### Check duplicate source records
 
 ```sql
-SELECT
-    source,
-    source_id,
-    COUNT(*) AS record_count
+SELECT source, source_id, COUNT(*) AS record_count
 FROM iris_staging.signal_ingest
 GROUP BY source, source_id
 HAVING COUNT(*) > 1;
@@ -294,21 +283,15 @@ Expected result: zero rows.
 ```sql
 SELECT
     COUNT(*) AS total_rows,
-    COUNT(*) FILTER (
-        WHERE title IS NULL OR BTRIM(title) = ''
-    ) AS missing_titles,
-    COUNT(*) FILTER (
-        WHERE source_id IS NULL OR BTRIM(source_id) = ''
-    ) AS missing_source_ids,
-    COUNT(*) FILTER (
-        WHERE source_url IS NULL OR BTRIM(source_url) = ''
-    ) AS missing_source_urls,
+    COUNT(*) FILTER (WHERE title IS NULL OR BTRIM(title) = '') AS missing_titles,
+    COUNT(*) FILTER (WHERE source_id IS NULL OR BTRIM(source_id) = '') AS missing_source_ids,
+    COUNT(*) FILTER (WHERE source_url IS NULL OR BTRIM(source_url) = '') AS missing_source_urls,
     COUNT(*) FILTER (WHERE ingested_at IS NULL) AS missing_ingested_at,
     COUNT(*) FILTER (WHERE updated_at IS NULL) AS missing_updated_at
 FROM iris_staging.signal_ingest;
 ```
 
-### Check geographic coverage
+### Check location status and spatial coverage
 
 ```sql
 SELECT
@@ -320,7 +303,7 @@ GROUP BY location_status
 ORDER BY article_count DESC;
 ```
 
-### Check geometry type, validity, and SRID
+### Check geometry validity, type, and SRID
 
 ```sql
 SELECT
@@ -350,118 +333,90 @@ WHERE signal_type IN (
 ORDER BY published_at DESC NULLS LAST;
 ```
 
-## 14. Verified Test and Database Results
+## 14. Automated Tests and Latest Validation Results
 
-The following results were observed in the development environment on 2026-10-28. Database counts can change after later ingestion runs.
+### Automated test suite
 
-### Automated tests
-
-Command:
+Run from the project root:
 
 ```powershell
 python -m pytest -v
 ```
 
-Result:
+Latest observed result on October 28, 2026:
 
-- Tests collected: **14**
-- Passed: **14**
+- Tests collected: **18**
+- Passed: **18**
 - Failed: **0**
-- Execution time: **0.25 seconds**
+- Reported duration: **0.36 seconds**
 
-The tests cover date normalization, distress and risk classification, feed parsing, duplicate handling, invalid feeds, HTTP errors, empty feeds, and entries missing required fields. These tests use test fixtures and mocked HTTP responses; they do not establish that the live feed will always be available.
+The test suite covers date normalization, signal classification, feed parsing, in-feed duplicate handling, malformed or empty feeds, HTTP errors, missing required fields, location-coordinate normalization, invalid coordinates, geocoding of an approved place, and the database upsert query.
 
-### Database checks
+The database upsert test uses a mocked connection. It verifies that repeated calls for the same `(source, source_id)` execute the expected `ON CONFLICT ... DO UPDATE` query; it does not independently prove database behavior against a live PostgreSQL server. The SQL validation below is a separate check against the actual development database.
 
-| Check | Verified result |
+### Latest observed PostgreSQL/PostGIS validation
+
+The following values were returned by the latest database validation run on October 28, 2026:
+
+| Check | Result |
 |---|---:|
-| PostgreSQL server version | 16.15 |
-| PostGIS version | 3.4.2 |
-| Total stored records | 117 |
-| Distinct `(source, source_id)` pairs | 117 |
-| Duplicate source-identifier pairs | 0 |
-| Records missing titles | 0 |
-| Records missing source URLs | 0 |
-| Records missing source IDs | 0 |
-| Records missing `ingested_at` | 0 |
-| Records missing `updated_at` | 0 |
-| Stored geometries | 4 |
-| Valid stored geometries | 4 |
-| Stored point geometries using SRID 25832 | 4 |
+| PostgreSQL version previously verified in the development environment | 16.15 |
+| PostGIS version previously verified in the development environment | 3.4.2 |
+| Total stored records | 118 |
+| Distinct `(source, source_id)` pairs | 118 |
+| Duplicate rows, calculated as total minus distinct pairs | 0 |
+| Rows with a non-null geometry | 4 |
+| Valid EPSG:25832 point geometries | 4 |
 
-The geometry metadata was also verified as `POINT` with SRID `25832`. The table contains 13 columns, including the PostGIS `geom` column.
+All four geometries present in that query were valid points with SRID 25832. Only 4 of 118 stored records had geometry, so geographic coverage remains a significant limitation.
 
-### Stored classifications
+### Rerun / idempotency evidence
 
-At the time of validation, the database contained:
-
-| Classification | Records |
-|---|---:|
-| No signal (`NULL`) | 107 |
-| `dairy_livestock_risk` | 10 |
-| `dairy_livestock_distress` | 0 |
-| **Total** | **117** |
-
-The latest run processed 100 articles and identified 7 risk signals and 0 explicit distress signals. These latest-run results differ from the cumulative database counts because the database contains previously stored records as well.
-
-### Stored location statuses
-
-The database location-status check returned:
-
-| Location status | Records | Records with geometry |
-|---|---:|---:|
-| `unresolved` | 89 | 0 |
-| `place_mention_unresolved` | 24 | 0 |
-| `place_geocoded` | 4 | 4 |
-| **Total** | **117** | **4** |
-
-Only 4 of the 117 stored records had geometry at the time of this check. Location coverage is therefore a known limitation and should be considered when interpreting spatial results.
-
-### Idempotency check
-
-The database contained 117 records before and after rerunning the pipeline. The distinct `(source, source_id)` count remained 117, with zero duplicate pairs. This verifies idempotent behavior for the feed snapshot and database state tested; it does not guarantee that every future feed or database failure scenario is covered.
+A previous local rerun check showed the total row count remaining at 117 before and after rerunning the harvester, with 117 unique source-identifier pairs and zero duplicate pairs. A later validation, after additional ingestion, reported 118 total rows, 118 distinct source-identifier pairs, and zero duplicates. Since the live feed can change, compare counts immediately before and after a rerun to verify whether the current feed snapshot adds any new records.
 
 ## 15. Reliability and Idempotency
 
-The pipeline uses the unique constraint on `(source, source_id)` together with PostgreSQL `ON CONFLICT` handling. Reprocessing an article with the same source identifier should update its existing record rather than create another row.
+The staging table's unique constraint on `(source, source_id)` and the database layer's `ON CONFLICT ... DO UPDATE` statement are intended to make ingestion repeatable. A record with an existing source identifier should update the corresponding row rather than create a duplicate.
 
-Feed content and article counts can change between runs. The number of records processed in a run may therefore differ from the total number of records already stored in the database.
+The number of articles retrieved during a run may differ from the cumulative database row count. Feed updates, changed article availability, and previously stored records explain why these counts should not be treated as interchangeable.
 
 ## 16. Known Limitations
 
-- Classification is keyword-based and can produce false positives or false negatives.
-- The feed may not include every relevant article or every historical article.
-- Article counts and signal counts can change between runs.
-- Place-name extraction relies on a predefined set of recognized locations.
-- Some locations remain unresolved or are too broad for precise geocoding.
-- A geocoded place does not necessarily identify the exact farm discussed.
-- The EPSG:25832 geographic filter is approximate.
-- Only a small portion of the currently stored records has a geometry.
-- Keyword detection alone does not establish actual farm closure or financial distress.
-- Live RSS, HTTP, database, and geocoding services may be temporarily unavailable.
-- Automated tests use fixtures and mocks for feed behavior; a passing test suite does not guarantee that external services will remain available.
+- Classification depends on configured keywords and can produce false positives or false negatives.
+- The feed may not contain every relevant article or historical article.
+- Source availability, response format, and article counts can change over time.
+- Location extraction depends on a predefined list of recognized place names.
+- Some location mentions remain unresolved or too broad for precise geocoding.
+- A geocoded place does not necessarily represent the exact farm location.
+- The approximate longitude/latitude filter excludes some locations that could otherwise be relevant.
+- Only a small proportion of the current database records has a geometry.
+- Keyword matches alone do not establish actual farm closure or financial distress.
+- The automated database test mocks persistence; real database constraints and geometry should continue to be checked with SQL validation.
+- Live RSS, HTTP, PostgreSQL, and geocoding services can be temporarily unavailable.
 
 ## 17. Error Handling and Quality Reporting
 
-The harvester raises errors when an HTTP request fails, a feed cannot be parsed into usable records, or a feed contains no usable article records. Database errors should also be treated as failed ingestion rather than successful completion.
+The harvester reports failures when HTTP requests fail, no usable article records are returned, or processing and database operations raise exceptions. The command-line entry point prints an error and re-raises the exception so that a failed execution does not appear to have completed successfully.
 
-Useful quality indicators for each run include:
+Useful per-run quality indicators include:
 
 - Number of articles retrieved.
-- Number of unique articles processed.
-- Number of explicit distress signals.
-- Number of risk signals.
-- Number of successfully geocoded locations.
+- Number of explicit distress and risk signals.
+- Number of accepted coordinates.
 - Number of unresolved place mentions.
 - Number of articles without a recognized location.
-- Number of records inserted or updated.
-- Any feed, geocoding, or database errors.
+- Number of invalid coordinates rejected.
+- Number of coordinates outside the configured target region.
+- Number of records processed for persistence.
+- Feed, geocoding, or database errors.
 
-The current console output reports unresolved place mentions separately from articles without a recognized location. Database location-status totals are cumulative and should not be interpreted as the counts for a single run.
+Run-level figures describe one feed response; database validation queries describe cumulative stored data.
 
-## 18. Security
+## 18. Security and Responsible Access
 
-- Keep database credentials in the local `.env` file.
-- Do not commit `.env` or expose real passwords in logs, screenshots, or documentation.
-- Use `.env.example` to document required environment variables with placeholder values.
-- Do not bypass website access restrictions when retrieving source material.
+- Keep real database credentials in the local `.env` file, not in source code.
+- Do not commit `.env` or publish passwords.
+- Use only authorized public source access and do not bypass site access restrictions.
+- Follow the source website's terms and applicable usage restrictions.
+- Use OpenStreetMap Nominatim responsibly and include suitable attribution where required.
+- Avoid storing more article content than is necessary for the assignment's ingestion and traceability needs.
