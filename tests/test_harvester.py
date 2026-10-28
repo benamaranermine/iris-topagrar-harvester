@@ -2,6 +2,7 @@
 from unittest.mock import Mock
 
 import pytest
+import requests
 
 from src.harvester import (
     classify_signal,
@@ -120,3 +121,82 @@ def test_unrelated_article_has_no_signal():
         "Neue Technik für Landwirte",
         "Ein Bericht über neue Technik.",
     ) is None
+
+
+def test_fetch_feed_raises_http_error(monkeypatch):
+    response = Mock()
+    response.raise_for_status.side_effect = requests.exceptions.HTTPError(
+        "404 Not Found"
+    )
+
+    monkeypatch.setattr(
+        "src.harvester.requests.get",
+        Mock(return_value=response),
+    )
+
+    with pytest.raises(requests.exceptions.HTTPError):
+        fetch_feed("https://example.com/missing-feed.xml")
+
+
+def test_fetch_feed_raises_error_for_empty_feed(monkeypatch):
+    response = Mock()
+    response.content = b"""<?xml version="1.0"?>
+    <rss version="2.0">
+      <channel>
+        <title>Empty test feed</title>
+      </channel>
+    </rss>
+    """
+    response.raise_for_status.return_value = None
+
+    monkeypatch.setattr(
+        "src.harvester.requests.get",
+        Mock(return_value=response),
+    )
+
+    with pytest.raises(ValueError, match="no usable article records"):
+        fetch_feed("https://example.com/empty-feed.xml")
+
+
+def test_parse_feed_skips_entries_missing_required_fields():
+    feed = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0">
+      <channel>
+        <title>Incomplete test feed</title>
+        <item>
+          <title>Article without a link</title>
+          <guid isPermaLink="false">missing-link</guid>
+        </item>
+        <item>
+          <link>https://example.com/missing-title</link>
+          <guid>missing-title</guid>
+        </item>
+        <item>
+          <title>Article without an identifier</title>
+          <link>https://example.com/missing-id</link>
+        </item>
+        <item>
+          <title>Valid dairy article</title>
+          <link>https://example.com/valid-article</link>
+          <guid>valid-article</guid>
+        </item>
+      </channel>
+    </rss>
+    """
+
+    records = parse_feed(feed)
+
+    assert len(records) == 2
+
+    titles = {record["title"] for record in records}
+
+    assert "Article without a link" not in titles
+    assert "Article without an identifier" in titles
+    assert "Valid dairy article" in titles
+
+    fallback_record = next(
+        record
+        for record in records
+        if record["title"] == "Article without an identifier"
+    )
+    assert fallback_record["source_id"] == "https://example.com/missing-id"
